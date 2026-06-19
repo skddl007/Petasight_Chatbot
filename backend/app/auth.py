@@ -1,18 +1,15 @@
+import bcrypt
 import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
-
 from app.database import get_db
 from app.models import User
 from app.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
@@ -24,11 +21,11 @@ def is_petasight_email(email: str) -> bool:
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 def create_access_token(user_id: int, email: str) -> str:

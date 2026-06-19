@@ -4,8 +4,9 @@ load_dotenv()
 
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.auth import get_current_user, router as auth_router
 from app.color_engine import decimal_to_rgb, panic_to_rgb, rgb_to_css, temp_to_rgb, text_color_for_bg
@@ -79,6 +80,13 @@ def create_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        if isinstance(exc, HTTPException):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
     app.include_router(auth_router)
     app.include_router(chat_router)
 
