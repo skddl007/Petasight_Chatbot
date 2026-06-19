@@ -51,16 +51,30 @@ async def chat(body: ChatRequest, user: User = Depends(get_current_user)):
     return build_response(reply, rgb, rule, {"panic_score": panic, **bilingual})
 
 
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "https://petasight-chatbot.vercel.app"
+)
+
+
+def get_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    if not origins:
+        origins = [o.strip() for o in DEFAULT_CORS_ORIGINS.split(",") if o.strip()]
+    return origins
+
+
 def create_app():
     Base.metadata.create_all(bind=engine)
 
     from fastapi import FastAPI
 
     app = FastAPI(title="Petasight Chatbot API")
-    origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[o.strip() for o in origins],
+        allow_origins=get_cors_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
