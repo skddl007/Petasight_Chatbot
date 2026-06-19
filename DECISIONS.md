@@ -102,4 +102,4 @@
 | Groq LLM (not canned) | Pass |
 | Keyboard / contrast accessibility | Pass (manual + luminance tests) |
 | `DECISIONS.md`, `REVIEW.md`, `AI_LOG.md` | Present |
-| Live deployment + public repo URL | Documented in [`DEPLOY.md`](DEPLOY.md) — deploy Render + Vercel manually |
+| Live deployment + public repo URL | **Live** — [Frontend](https://petasight-chatbot.vercel.app) · [API](https://petasight-chatbot-api.onrender.com) |

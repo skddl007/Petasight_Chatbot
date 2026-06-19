@@ -44,4 +44,9 @@ Ran against `public/brief.md` requirements:
 - **Live API** on `localhost:8000`: auth rejection, all three color rules, ambiguity case `"Mumbai 32 and rating 0.42"` → Rule 1, bilingual meta on every reply
 - **Contrast:** luminance-based text color passes across sample Rule 1/2/3 backgrounds
 - **Frontend:** `npm run build` succeeds
-- **Still outstanding before submission:** deploy to Vercel + backend host, push public repo, add live URLs to README
+- **Still outstanding before submission:** ensure Render `CORS_ORIGINS` and Vercel `VITE_API_URL` match production URLs (see README)
+
+## Production URLs
+
+- Frontend: https://petasight-chatbot.vercel.app
+- Backend: https://petasight-chatbot-api.onrender.com
