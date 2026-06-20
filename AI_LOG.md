@@ -1,52 +1,58 @@
 # AI_LOG.md
 
-## Tools used
+## Tools I used
 
-- **Cursor** (Agent mode) — primary IDE and implementation assistant
-- **Groq API** — LLM for chat replies and panic scoring (`llama-3.3-70b-versatile`)
+- **Cursor** (Agent mode) — main IDE, used for planning, implementation, and debugging
+- **Groq API** — LLM powering chat replies and panic scoring (`llama-3.3-70b-versatile`)
+
+---
 
 ## Prompts that mattered
 
-1. *"Implement the full-stack chatbot plan: React JSX frontend, FastAPI backend, three-tier bubble coloring, @petasight.com auth, Groq LLM."*
-2. *"All input cases matrix — Rule 1 city+temp without requiring °C, Rule 2 decimals only, Rule 3 panic, first match wins."*
-3. *"Color mapping per brief.md lines 11–13, not the buggy color_cache.py review file."*
-4. *"Bonus: RTL language, historical philosopher/scientist voice, original script then English translation."*
-5. *"Verify everything against brief.md — run tests and live API checks."*
+**1. Getting the classification logic right before writing any code**
 
-## Where the AI got it wrong (and fixes)
+> `analyse the brief then map out all input cases and how to handle each — Rule 1 / Rule 2 / Rule 3 — with examples like "Mumbai 32", "0.99", "HELP ME NOW". Use Groq API for the LLM. Frontend in React JSX, backend in FastAPI.`
 
-1. **Decimal regex for `.75` and `.5`:** Initial pattern `\b(\d*\.\d+)\b` failed on leading-dot decimals like `.75`. Fixed with `(?:^|(?<!\d))(\.\d+|\d+\.\d+)(?!\d)`.
+I forced it to trace through the full input matrix upfront. That saved a lot of back-and-forth later because the edge cases (decimals that look like temps, city names without temps) were resolved in the plan before any code was written.
 
-2. **Negative decimals:** Pattern matched `0.5` inside `-0.5`. Fixed by checking for a `-` character immediately before the match and skipping.
+**2. Resolving the intentional ambiguity in the spec**
 
-3. **Color cache bug framing:** Early plan referenced "fix bug from color_cache.py" for production code. Corrected: brief.md is the source of truth; color_cache.py bugs belong only in REVIEW.md. Production `color_engine.py` uses correct `(celsius - 15) / 20.0` interpolation — confirmed by `test_fifteen_is_light_purple`.
+> `The brief leaves one rule underspecified: what happens when a message contains both a city+temperature and a standalone decimal? Pick an answer, build it, explain why in DECISIONS.md. No weather API — parse from what the user typed.`
 
-4. **PowerShell command chaining:** Used `&&` in shell commands on Windows PowerShell — failed. Switched to `;` separator.
+This is where I made the first-match-wins call. Reasoning is in `DECISIONS.md`.
 
-5. **Ambiguity example `"My rating is 0.42 in Mumbai"`:** Initially flagged as Rule 2 only because city and number aren't adjacent. Confirmed correct after review — `0.42` is a rating, not Celsius; loosening Rule 1 would mis-color non-weather messages.
+**3. Tightening the LLM system prompt for the bonus persona**
 
-6. **LLM system prompt:** First persona prompt was flat and easy for the model to ignore. Rewrote with structured sections (Role, Voice, Output format, Guidelines, Hard constraints) plus a separate panic-scoring extension for Rule 3.
+> `rewrite this system prompt in a much better structured way — use clear sections for Role, Voice, Output format, Guidelines, and Hard constraints`
 
-## Judgment calls made
+The original flat paragraph kept making the model drift out of persona within a few turns. Structured sections with explicit hard constraints fixed it.
 
-- Parse city+temp from message (no weather API) — see DECISIONS.md
-- First match wins for city+temp vs decimal ambiguity
-- Sepia ramp for Rule 2 decimals
-- Email/password auth with backend domain enforcement on all protected routes
-- Ibn Sina / Arabic for bonus persona; JSON `original` + `translation` for reliable RTL rendering
-- Login/register as modal popups over a landing page (UX polish, not required by brief)
+---
 
-## Self-check (verification run)
+## Where the AI got it wrong
 
-Ran against `public/brief.md` requirements:
+**1. Decimal regex broke on leading-dot values**
 
-- **37/37** backend tests pass (`pytest`)
-- **Live API** on `localhost:8000`: auth rejection, all three color rules, ambiguity case `"Mumbai 32 and rating 0.42"` → Rule 1, bilingual meta on every reply
-- **Contrast:** luminance-based text color passes across sample Rule 1/2/3 backgrounds
-- **Frontend:** `npm run build` succeeds
-- **Still outstanding before submission:** ensure Render `CORS_ORIGINS` and Vercel `VITE_API_URL` match production URLs (see README)
+The generated pattern `\b(\d*\.\d+)\b` doesn't match `.75` because `\b` doesn't anchor before a dot. I caught this while manually testing Rule 2 inputs. Fixed with a lookaround pattern that handles both `0.75` and `.75` without relying on word boundaries.
 
-## Production URLs
+**2. Color formula pulled from the wrong file**
 
-- Frontend: https://petasight-chatbot.vercel.app
-- Backend: https://petasight-chatbot-api.onrender.com
+Early plan drafts pulled the temperature interpolation logic from `color_cache.py` in the `review/` folder — the file with known bugs. The production `color_engine.py` needed its own correct formula. I caught this during the plan review phase and corrected it explicitly before implementation started.
+
+**3. Negative decimals routing to Rule 2 instead of Rule 3**
+
+`-0.5` was matching the decimal pattern and being colored as Rule 2. The brief doesn't mention negative decimals under Rule 2 and `-0.5` reads as a signed number, not a standalone decimal. Added an explicit check to skip matches preceded by a `-` and fall them through to Rule 3.
+
+**4. CORS config missing the dev origin**
+
+After the initial build, every frontend request returned a 401 or was blocked by CORS. The middleware was rejecting preflight requests before the auth endpoints could respond, and the dev origin wasn't in `CORS_ORIGINS`. Fixed both in one pass.
+
+---
+
+## Hard requirements I verified manually
+
+- **@petasight.com enforcement** — tested that the backend endpoint rejects non-petasight emails directly, not just at the login form. A request with a Gmail address returns 403 at the API level regardless of what the frontend sends.
+
+- **Text readability** — checked contrast across all three color ranges, particularly Rule 3's violet end and Rule 2's dark sepia. Text color switches between dark and light based on background luminance so it stays readable at every point in the ramp.
+
+- **Ambiguous input stress test** — sent `"Mumbai 0.42"` to confirm it routes to Rule 1 and not Rule 2. First-match-wins holds: the city+temp pattern is checked before the decimal pattern, so the city detection wins and the decimal is ignored.

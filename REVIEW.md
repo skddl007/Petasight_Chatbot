@@ -1,59 +1,41 @@
 # REVIEW.md
 
-Review of [`public/review/color_cache.py`](public/review/color_cache.py) and [`public/review/test_color_cache.py`](public/review/test_color_cache.py).
+I went through both files and found two bugs in color_cache.py.
 
----
 
-## Bug 1: Wrong interpolation factor for 15–35°C (lines 28–30)
+# Bug 1: color_cache.py, temp_to_rgb function
 
-**What's broken:** The 15–35°C segment uses `f = celsius / 35.0` instead of normalizing over the 15–35 range.
+The issue is in the last part of the function where it handles 15 to 35 degrees:
 
-**Why it matters:** At exactly 15°C, `f = 15/35 ≈ 0.43`, so the color is ~43% toward bright red instead of at the light purple anchor. The brief requires *"light purple around 15"* — this formula skips that anchor entirely for the upper segment.
+# f = celsius / 35.0
 
-**Fix:**
-```python
-f = (celsius - 15) / 20.0
-return _lerp(LIGHT_PURPLE, BRIGHT_RED, f)
-```
 
-**Test to add:** `assert temp_to_rgb(15) == LIGHT_PURPLE`
+This is wrong. f here is supposed to say how far we are between 15°C and 35°C, so at 15°C it should be 0.0 and at 35°C it should be 1.0. But dividing by 35 doesn't do that, at 15°C you get 0.43, which means the color is already almost halfway to bright red before it even starts the segment. If you open the app and type something at 14°C then 16°C you did see the color jump, it does not blend smoothly through light purple at all.
 
----
+The fix is straightforward:
 
-## Bug 2: Cache key contradicts comment (line 36)
+# f = (celsius - 15) / 20.0
 
-**What's broken:** Comment says *"Use the exact temperature as the cache key"* but code uses `round(celsius)`, collapsing nearby values (e.g. 20.1 and 20.4 share key `20`).
 
-**Why it matters:** Different precise temperatures may return a cached color computed for a different value. Misleading comment suggests this is unintentional.
+Subtract 15 so you are counting from the start of the range, divide by 20 because that's the size of the range (35 minus 15). Now 15°C gives 0.0 and 35°C gives 1.0 and the gradient is smooth.
 
-**Fix:** Either use `celsius` directly as key (if exact caching is desired) or update the comment to document intentional rounding for cache efficiency.
 
----
+# Bug 2: color_cache.py, cached_color function
 
-## Bug 3: No cache eviction
+This one is a bit subtle. The cache rounds the temperature to use as a key, but then computes the color from the original unrounded value:
 
-**What's broken:** Stale entries remain in `_CACHE` forever; they are only ignored on read after TTL expires.
+key = round(celsius)
+rgb = temp_to_rgb(celsius)   # still using the exact value
+_CACHE[key] = (now, rgb)
 
-**Why it matters:** Memory grows unbounded over long-running processes with many distinct temperatures.
+So if you call cached_color(20.9), it stores that color under key 20. Next call with cached_color(20.1) hits the same key and returns the color for 20.9 instead. The cache is lying about what it stored.
 
-**Fix:** Delete expired entries on read, or run periodic cleanup. For a chatbot with limited temperature range this is minor but worth noting.
+Fix it by computing from the rounded value too:
 
----
+key = round(celsius)
+rgb = temp_to_rgb(key)
+_CACHE[key] = (now, rgb)
 
-## Bug 4: Weak test coverage (`test_color_cache.py`)
+Now key 20 always holds the color for exactly 20°C, no mismatch.
 
-**What's broken:**
-- No test for the 15°C anchor (would catch Bug 1).
-- No mid-range temperature assertion (e.g. 25°C).
-- `test_cache_runs` only calls `cached_color(20)` and asserts `True` — vacuous, tests nothing.
-- No cache hit/miss or TTL expiry tests.
-
-**Fix:** Add tests for 15°C, 25°C, cache hit on second call with same rounded key, and expired TTL returning fresh computation.
-
----
-
-## Production note
-
-The corrected `temp_to_rgb` implementation lives in [`backend/app/color_engine.py`](backend/app/color_engine.py), following [`public/brief.md`](public/brief.md) line 11 — not the buggy review file.
-
-**Confirmed in production tests:** `test_fifteen_is_light_purple`, `test_thirty_five_is_bright_red`, and live API color output for `"Mumbai 32"` match the brief's anchors (15°C purple, 35°C red).
+I also added four tests to test_color_cache.py to cover the 15°C anchor, the boundary continuity, the cache key collision, and a range check the original tests only covered the extremes and missed both bugs entirely.

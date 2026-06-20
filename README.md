@@ -72,7 +72,7 @@ Full guide: **[DEPLOY.md](DEPLOY.md)**
 - [`REVIEW.md`](REVIEW.md) — bugs in `public/review/color_cache.py`
 - [`AI_LOG.md`](AI_LOG.md) — AI tools and corrections
 
-## API
+##   API
 
 ```
 POST /auth/register  { email, password }

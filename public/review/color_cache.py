@@ -41,3 +41,29 @@ def cached_color(celsius):
     rgb = temp_to_rgb(celsius)
     _CACHE[key] = (now, rgb)
     return rgb
+
+# --- added ---
+ 
+def test_15C_is_light_purple():
+    # spec calls this out as a named anchor, and this is where Bug 1 breaks
+    assert temp_to_rgb(15) == LIGHT_PURPLE
+ 
+ 
+def test_color_continuous_at_15C():
+    # no visible jump at the boundary between the two segments
+    below = temp_to_rgb(14.9)
+    above = temp_to_rgb(15.1)
+    for a, b in zip(below, above):
+        assert abs(a - b) < 5
+ 
+ 
+def test_cache_key_collision_is_consistent():
+    # 20.1 and 20.9 both round to 20, should return same color
+    assert cached_color(20.1) == cached_color(20.9)
+ 
+ 
+def test_rgb_values_in_valid_range():
+    # out of range channels break colors silently in the browser
+    for temp in range(-10, 45):
+        r, g, b = temp_to_rgb(temp)
+        assert all(0 <= c <= 255 for c in (r, g, b))

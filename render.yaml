@@ -18,3 +18,4 @@ services:
         value: sqlite:///./chatbot.db
       - key: CORS_ORIGINS
         value: https://petasight-chatbot.vercel.app
+        

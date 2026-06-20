@@ -71,3 +71,4 @@ def test_chat_rejects_empty_message(client):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 422
+#test cases

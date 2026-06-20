@@ -1,105 +1,175 @@
 # DECISIONS.md
 
-## Ambiguity: city+temp AND standalone decimal in one message
+## The three rules — how they are defined
 
-**Decision:** Apply rules in strict priority order (Rule 1 → Rule 2 → Rule 3). First match determines bubble color; later patterns are ignored for coloring.
+The brief requires checking rules **in order; first match wins**. Classification lives in `backend/app/input_classifier.py`; colors in `backend/app/color_engine.py`.
 
-**Examples:**
-- `"Mumbai 32.5"` → Rule 1 (`temp_to_rgb(32.5)`). The number is a Celsius temperature paired with a city, not a standalone decimal.
-- `"Mumbai 32 and rating 0.42"` → Rule 1 (`temp_to_rgb(32)`). City+temp is detected before the decimal scan.
-- `"0.42"` alone → Rule 2 (sepia from `.42`).
-- `"My rating is 0.42 in Mumbai"` → Rule 2. No city+temp pattern (city and number are not paired as temperature; `0.42` is a rating, not °C).
-
-**Why:** The brief explicitly states *"Check these in order, first match wins."* This is deterministic, testable, and avoids subjective heuristics about which pattern is "more important."
-
-**Verified:** `test_rule1_wins_over_decimal` and live API — `"Mumbai 32 and rating 0.42"` returns `ruleApplied: city_temp`.
+| Order | Rule | When it applies | Bubble color |
+|-------|------|-----------------|--------------|
+| 1 | **City + temperature** | Message matches a city paired with a Celsius temperature | Deep blue → light purple → bright red |
+| 2 | **Standalone decimal** | No Rule 1 match, but a decimal number is present | Sepia ramp (`.00` lightest → `.99` darkest) |
+| 3 | **Panic / mood** | Neither Rule 1 nor Rule 2 matches | Violet (panic) → magenta → pale yellow (calm) |
 
 ---
 
-## City + temperature: parse from message (no weather API)
+### Rule 1 — City + temperature in Celsius
 
-**Decision:** Extract city name and temperature from the user's message text. Do not call an external weather API.
+**Brief:** *"A city and a temperature in Celsius."*
 
-**Why:** The brief says bubble color depends on *"what the user typed"* and describes *"a city and a temperature in Celsius"* in the message — not live weather lookup. A weather API would introduce new ambiguity (typed `32` vs actual `28°C`) and add scope beyond the assignment.
+**Detection** — message must match one of these patterns (regex in `input_classifier.py`):
 
-**Verified:** Classifier tests cover `Mumbai 32`, `32C in Berlin`, `it's 20 degrees in Paris`, and negative temps.
+1. **City then temp:** `Mumbai 32`, `Delhi 15C`, `London 28°C`, `Paris -5`
+   - City name (letters, spaces, hyphens, apostrophes) immediately followed by a number
+   - Optional `°`, `C`, or `celsius` after the number
 
----
+2. **Temp then city:** `32C in Berlin`, `28°C in London`
+   - Number + `C`/`celsius` + `in` / `at` / `for` + city name
 
-## Rule 2: sepia ramp (not grayscale)
+3. **Degrees phrasing:** `it's 20 degrees in Paris`, `20 degree in Tokyo`
+   - Optional `it's` + number + `degree(s)` + `in` / `at` / `for` + city name
 
-**Decision:** Use a sepia color ramp for standalone decimals. The brief allows *"Grayscale or sepia"* — sepia was chosen for visual distinction from Rule 1's blue-purple-red spectrum.
+**Does not match Rule 1:**
+- City alone (`Mumbai`) or integer alone (`32`)
+- Number and city in the same sentence but **not paired as weather** — e.g. `"My rating is 0.42 in Mumbai"` (rating, not °C; city not adjacent to temp)
+- Messages with no recognizable city+temp pattern
 
-**Digit extraction:** Take the first two digits after the decimal point, zero-padded (`.5` → `50` → `0.50`). Map 00–99 to lightness: `.00` lightest, `.99` darkest.
+**Color mapping** (`temp_to_rgb`):
 
-**Verified:** Tests for `3.14`, `0.99`, `.75`, `.5`; live API — `"0.42"` → `ruleApplied: decimal`.
+| Temperature | Color |
+|-------------|--------|
+| ≤ 0°C | Deep blue `rgb(0, 0, 139)` |
+| 0°C → 15°C | Linear blend deep blue → light purple `rgb(200, 160, 230)` |
+| 15°C | Light purple (anchor) |
+| 15°C → 35°C | Linear blend light purple → bright red `rgb(220, 20, 20)` |
+| ≥ 35°C | Bright red |
 
----
+**Examples:** `Mumbai 32` → Rule 1, ~red; `Delhi 0` → deep blue; `London 15` → light purple.
 
-## Whole numbers and negative decimals
-
-- `"32"` (integer only) → Rule 3 (LLM panic). Rule 2 requires a decimal point.
-- `"-0.5"` → Rule 3. Negative decimals are not in the spec for Rule 2; classifier skips the `-` prefix before the decimal match.
-
-**Verified:** `test_falls_to_panic` for bare `"32"`; `test_negative_decimal_falls_to_panic` for `"-0.5"`.
-
----
-
-## Rule 1 color mapping (production vs review file)
-
-**Decision:** Implement `temp_to_rgb` in `backend/app/color_engine.py` per brief line 11 — not the buggy `public/review/color_cache.py`.
-
-**Anchors:** deep blue ≤ 0°C, light purple at 15°C, bright red ≥ 35°C, linear interpolation between segments.
-
-**Verified:** `test_fifteen_is_light_purple`, `test_thirty_five_is_bright_red`; live API — `"Mumbai 32"` → `rgb(217, 41, 52)` (32°C in the 15–35°C segment).
+**Reply:** Groq LLM (Ibn Sina persona) — coloring only depends on the detected temperature.
 
 ---
 
-## Readable text on dynamic backgrounds
+### Rule 2 — Standalone decimal
 
-**Decision:** Backend computes `textColor` per bubble using relative luminance (`#ffffff` on dark backgrounds, `#000000` on light). Frontend applies the returned color directly on bot bubbles.
+**Brief:** *"Otherwise, a standalone decimal number."*
 
-**Verified:** Contrast checks across sample temperatures, decimals, and panic scores — all pass.
+**Detection** — first decimal in the message matching:
 
----
+```
+(?:^|(?<!\d))(\.\d+|\d+\.\d+)(?!\d)
+```
 
-## LLM provider
+- Matches: `3.14`, `0.42`, `.75`, `.5`, `0.99`
+- **Requires a decimal point** — bare `32` does not match (falls to Rule 3)
+- **Negative decimals excluded** — `-0.5` is skipped (the `-` before the match disqualifies it)
+- If multiple decimals exist, the **first** one wins (e.g. `3.14 2.71` → uses `.14`)
 
-**Decision:** Groq API with `llama-3.3-70b-versatile` for real conversational replies and Rule 3 panic scoring. `response_format: json_object` for structured bilingual output.
+**Digit extraction for color:**
+- Take the **first two digits after the decimal point**, zero-padded on the right
+- `.5` → `50`, `3.14` → `14`, `0.00` → `00`, `0.99` → `99`
+- Map 00–99 to a **sepia** ramp: `.00` lightest beige, `.99` darkest brown
 
-**Verified:** Live API returns non-canned Groq replies on all three rules.
+**Examples:** `0.42` → Rule 2, sepia from digits `42`; `3.14` → sepia from `14`.
 
----
-
-## Auth
-
-**Decision:** Email + password with JWT. Backend enforces `@petasight.com` on register, login, `/auth/me`, and `/chat` — not just the login form. Frontend modal validates the domain client-side for faster feedback.
-
-**Verified:** `test_register_rejects_non_petasight` (403), `test_chat_requires_auth` (401).
-
----
-
-## Bonus: RTL philosopher persona
-
-**Decision:** All LLM replies use **Ibn Sina (Avicenna)** — 11th-century Persian polymath of the Islamic Golden Age — speaking in **Arabic** (RTL script), followed by an English translation. Coloring rules are unchanged; only the reply voice/format is affected.
-
-**Format:** Groq returns JSON `{ "original", "translation" }` (plus `panic_score` for Rule 3). The API `reply` field keeps the combined string for chat history; `meta` carries `persona`, `language`, `original`, and `translation` for the frontend to render RTL block + LTR translation.
-
-**Why Arabic / Ibn Sina:** Arabic is a natural RTL language with a rich tradition of philosophy and science; Ibn Sina fits the brief's "historical philosopher or scientist from that culture." Structured JSON keeps parsing reliable and lets the UI set `dir="rtl"` on the original text without guessing from plain prose.
-
-**Verified:** Live API — all three rules return `meta.persona: "Ibn Sina (Avicenna)"` with Arabic `original` and English `translation`.
+**Reply:** Groq LLM (Ibn Sina persona) — coloring only depends on the decimal digits.
 
 ---
 
-## Verification summary (against `public/brief.md`)
+### Rule 3 — LLM panic score (everything else)
 
-| Check | Result |
+**Brief:** *"Otherwise, ask the LLM how urgent or panicked the message sounds."*
+
+**Detection** — fallback when Rule 1 and Rule 2 both fail.
+
+**Examples that reach Rule 3:**
+- Plain text: `HELP ME NOW`, `hello`, `what's the weather?`
+- City only: `Mumbai`
+- Integer only: `32`
+- Negative decimal: `-0.5`
+
+**Panic scoring** — Groq returns JSON with `panic_score` from **0.0** (completely calm) to **1.0** (extreme panic), based on how urgent the message sounds.
+
+**Color mapping** (`panic_to_rgb`):
+
+| Panic score | Color |
+|-------------|--------|
+| 0.0 | Pale yellow `rgb(255, 255, 200)` — calm |
+| 0.0 → 0.5 | Blend pale yellow → magenta |
+| 0.5 | Magenta `rgb(255, 0, 255)` |
+| 0.5 → 1.0 | Blend magenta → violet |
+| 1.0 | Violet `rgb(138, 43, 226)` — high panic |
+
+**Reply:** Groq LLM (Ibn Sina persona) + panic score in one JSON call.
+
+---
+
+## What happens when a message has both a city+temp and a standalone decimal?
+
+The brief deliberately leaves this open-ended and says not to ask — just pick something and explain it.
+
+**Decision: strict priority order, first match wins.** If Rule 1 matches, the bubble is colored by temperature. The decimal is ignored for coloring, even if it appears in the same message.
+
+| Message | Rule | Why |
+|---------|------|-----|
+| `Mumbai 32.5` | Rule 1 | City+temp pair; `32.5` is Celsius, not a standalone decimal for coloring |
+| `Mumbai 32 and rating 0.42` | Rule 1 | `Mumbai 32` matches before decimal scan |
+| `0.42` | Rule 2 | No city+temp pattern |
+| `My rating is 0.42 in Mumbai` | Rule 2 | No city+temp pair; `0.42` is a rating, not weather |
+
+Verified: `test_rule1_wins_over_decimal` and live API on `"Mumbai 32 and rating 0.42"` → Rule 1.
+
+---
+
+## City + temperature: parse from the message, no weather API
+
+The brief describes Rule 1 as triggering on *"a city and a temperature in Celsius"* in the message — not live weather lookup. A weather API would introduce ambiguity (typed `32` vs actual `28°C`) and extra scope.
+
+---
+
+## Rule 2 color ramp: sepia over grayscale
+
+The brief allows *"Grayscale or sepia."* Sepia was chosen for visual separation from Rule 1’s blue–purple–red spectrum and Rule 3’s violet–magenta–yellow range.
+
+---
+
+## Rule 1 color mapping — brief, not the review file
+
+Production `color_engine.py` follows the brief directly. The buggy `public/review/color_cache.py` uses wrong interpolation for 15–35°C — see `REVIEW.md`. `test_fifteen_is_light_purple` confirms the 15°C anchor.
+
+---
+
+## Text readability on dynamic backgrounds
+
+`textColor` is computed server-side from background luminance (WCAG formula) and returned with every reply so text stays readable on all three rule color ranges.
+
+---
+
+## LLM choice: Groq with llama-3.3-70b-versatile
+
+Real LLM for all replies (not canned). Rule 3 uses structured JSON with `panic_score`; Rules 1–2 use the same LLM for chat with bilingual Ibn Sina output.
+
+---
+
+## Auth design
+
+Email + password with JWT. Backend enforces `@petasight.com` on register, login, `/auth/me`, and `/chat`.
+
+---
+
+## Bonus: Ibn Sina speaking Arabic
+
+Replies in Arabic (RTL) as Ibn Sina, then English translation. JSON fields `original` + `translation`; frontend sets `dir="rtl"` on Arabic text.
+
+---
+
+## Verification summary
+
+| Check | Status |
 |-------|--------|
-| Backend `pytest` (37 tests) | Pass |
-| Rule 1 / 2 / 3 classification + colors | Pass |
-| First-match ambiguity | Pass |
+| Backend pytest (37 tests) | Pass |
+| Rule 1 / 2 / 3 classification and colors | Pass |
+| First-match ambiguity | Rule 1 wins when both patterns present |
 | `@petasight.com` backend enforcement | Pass |
 | Groq LLM (not canned) | Pass |
-| Keyboard / contrast accessibility | Pass (manual + luminance tests) |
-| `DECISIONS.md`, `REVIEW.md`, `AI_LOG.md` | Present |
-| Live deployment + public repo URL | **Live** — [Frontend](https://petasight-chatbot.vercel.app) · [API](https://petasight-chatbot-api.onrender.com) |
+| Keyboard navigation and contrast | Pass |
+| Live deployment | [Frontend](https://petasight-chatbot.vercel.app) · [API](https://petasight-chatbot-api.onrender.com) |
